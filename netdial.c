@@ -123,8 +123,24 @@ netaddrparse(const char *str, struct netaddr *na)
         return false;
 
     const char *node = ++colon;
-    colon = strchr(node, ':');
-    const unsigned nodelen = colon ? colon - node : strlen(node);
+    unsigned nodelen;
+    if (*node == '[') {
+        /* Bracketed IPv6 address. */
+        const char *endbracket = strchr(++node, ']');
+        if (!endbracket)
+            return false;
+        nodelen = endbracket++ - node;
+        if (*endbracket != ':')
+            return false;
+        colon = endbracket;
+        if (na->family == AF_UNSPEC)
+            na->family = AF_INET6;
+        else if (na->family != AF_INET6)
+            return false;
+    } else {
+        colon = strchr(node, ':');
+        nodelen = colon ? colon - node : strlen(node);
+    }
     if (nodelen > NI_MAXHOST)
         return false;
 
