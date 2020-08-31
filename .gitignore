@@ -1,0 +1,4 @@
+*.[do]
+/mkfile
+/test-*
+!/test-*.c
