@@ -192,6 +192,25 @@ netaddrparse(const char *str, struct netaddr *na)
     return true;
 }
 
+static bool
+applyflags(const struct netaddr *na, int fd)
+{
+    assert(na);
+    assert(fd >= 0);
+
+    for (uint8_t i = 0; i < na->nflags; i++) {
+        const struct flagaction *fa = na->flags[i];
+        if (fa->flag) {
+            static const int value = 1;
+            if (setsockopt(fd, SOL_SOCKET, fa->flag, &value, sizeof(value)))
+                return false;
+        } else {
+            /* TODO: Flag is unsupported in this build, log warning. */
+        }
+    }
+    return true;
+}
+
 static int
 netdialunix(const struct netaddr *na, int flag)
 {
@@ -271,10 +290,16 @@ netdial(const char *address, int flag)
     if (!netaddrparse(address, &na))
         return -1;
 
-    if (na.family == AF_UNIX)
-        return netdialunix(&na, flag);
+    int fd = (na.family == AF_UNIX)
+        ? netdialunix(&na, flag)
+        : netdialinet(&na, flag);
 
-    return netdialinet(&na, flag);
+    if (fd >= 0 && !applyflags(&na, fd)) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
 }
 
 static int
