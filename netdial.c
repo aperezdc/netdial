@@ -8,6 +8,23 @@
 #define _POSIX_C_SOURCE 201112L
 #define _DEFAULT_SOURCE
 
+#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+# define AUTODETECTED_ACCEPT4 1
+# define _BSD_SOURCE
+#endif /* __*BSD__ */
+
+#if defined(__linux__)
+# define AUTODETECTED_ACCEPT4 1
+#endif /* __linux__ */
+
+#if !defined(AUTODETECTED_ACCEPT4)
+# define AUTODETECTED_ACCEPT4 0
+#endif /* !AUTODETECTED_ACCEPT4 */
+
+#if !defined(HAVE_ACCEPT4)
+# define HAVE_ACCEPT4 AUTODETECTED_ACCEPT4
+#endif /* !HAVE_ACCEPT4 */
+
 #include "dbuf/dbuf.h"
 #include "netdial.h"
 #include <assert.h>
@@ -27,9 +44,9 @@
 #define nelem(v) (sizeof(v) / sizeof(v[0]))
 #endif /* !nelem */
 
-#if defined(__linux__) || defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+#if HAVE_ACCEPT4
 extern int accept4(int, struct sockaddr*, socklen_t*, int);
-#else /* accept4() */
+#else /* !HAVE_ACCEPT4 */
 static inline int
 accept4(int fd, struct sockaddr *sa, socklen_t *salen, int flags)
 {
@@ -57,7 +74,7 @@ beach:
     close(nfd);
     return -1;
 }
-#endif /* accept4() */
+#endif /* HAVE_ACCEPT4 */
 
 
 struct flagaction {
