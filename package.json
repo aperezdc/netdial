@@ -1,9 +1,19 @@
 {
-	"name": "netdial",
-	"version": "0.1.0",
-	"repo": "aperezdc/netdial",
-	"description": "",
-	"license": "MIT",
-	"keywords": ["network", "sockets", "utility"],
-	"src": ["netdial.h", "netdial.c"]
+  "name": "netdial",
+  "version": "0.1.0",
+  "repo": "aperezdc/netdial",
+  "description": "",
+  "license": "MIT",
+  "keywords": [
+    "network",
+    "sockets",
+    "utility"
+  ],
+  "src": [
+    "netdial.h",
+    "netdial.c"
+  ],
+  "dependencies": {
+    "aperezdc/dbuf": "0.1.0"
+  }
 }

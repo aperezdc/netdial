@@ -26,7 +26,16 @@ enum {
     NetdialNonblock = 1 << 2,
 };
 
+enum {
+    NetdialClose = 0,
+    NetdialRead = 1 << 1,
+    NetdialWrite = 1 << 2,
+    NetdialReadwrite = NetdialRead | NetdialWrite,
+};
+
 extern int netdial(const char *address, int flag);
-extern int netannounce(const char *address, int flag);
+extern int netannounce(const char *address, int flag, int backlog);
+extern int netaccept(int fd, int flag, char **remoteaddr);
+extern int netclose(int fd, int flag);
 
 #endif /* !NETDIAL_H */

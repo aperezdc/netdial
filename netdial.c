@@ -8,12 +8,16 @@
 #define _POSIX_C_SOURCE 201112L
 #define _DEFAULT_SOURCE
 
+#include "dbuf/dbuf.h"
 #include "netdial.h"
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -22,6 +26,39 @@
 #ifndef nelem
 #define nelem(v) (sizeof(v) / sizeof(v[0]))
 #endif /* !nelem */
+
+#if defined(__linux__) || defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+extern int accept4(int, struct sockaddr*, socklen_t*, int);
+#else /* accept4() */
+static inline int
+accept4(int fd, struct sockaddr *sa, socklen_t *salen, int flags)
+{
+    int nfd = accept(fd, sa, salen);
+    if (nfd < 0)
+        return nfd;
+
+    const int of = fcntl(nfd, F_GETFD);
+    if (of == -1)
+        goto beach;
+
+    int nf = of;
+    if (flags & SOCK_NONBLOCK)
+        nf |= O_NONBLOCK;
+    else
+        nf &= ~O_NONBLOCK;
+
+    if (nf != of)
+        if (fcntl(nfd, F_SETFD, nf) == -1)
+            goto beach;
+
+    return nfd;
+
+beach:
+    close(nfd);
+    return -1;
+}
+#endif /* accept4() */
+
 
 struct flagaction {
     const char *name;
@@ -96,6 +133,15 @@ getnettype(const char *name, unsigned namelen, int *family, int *socktype)
     }
 
     return false;
+}
+
+static const char*
+getnetname(int family, int socktype)
+{
+    for (unsigned i = 0; i < nelem(nettypes); i++)
+        if (nettypes[i].family == family && nettypes[i].socktype == socktype)
+            return nettypes[i].name;
+    return NULL;
 }
 
 struct netaddr {
@@ -212,14 +258,18 @@ applyflags(const struct netaddr *na, int fd)
 }
 
 static int
-netdialunix(const struct netaddr *na, int flag)
+unixsocket(const struct netaddr *na, int flag, struct sockaddr_un *name)
 {
-    struct sockaddr_un name = { .sun_family = AF_UNIX };
-    if (na->addrlen >= sizeof(name.sun_path)) {
-        errno = ENOENT;
+    assert(na);
+    assert(name);
+
+    if (na->addrlen >= sizeof(name->sun_path)) {
+        errno = ERANGE;
         return -1;
     }
-    strncpy(name.sun_path, na->address, na->addrlen);
+
+    *name = (struct sockaddr_un) { .sun_family = AF_UNIX };
+    strncpy(name->sun_path, na->address, na->addrlen);
 
     int socktype = na->socktype;
     if (flag & NetdialCloexec)
@@ -227,7 +277,14 @@ netdialunix(const struct netaddr *na, int flag)
     if (flag & NetdialNonblock)
         socktype |= SOCK_NONBLOCK;
 
-    int fd = socket(AF_UNIX, socktype, 0);
+    return socket(AF_UNIX, socktype, 0);
+}
+
+static int
+netdialunix(const struct netaddr *na, int flag)
+{
+    struct sockaddr_un name;
+    int fd = unixsocket(na, flag, &name);
     if (fd < 0)
         return -1;
 
@@ -249,7 +306,8 @@ netaddrinfo(const struct netaddr *na, int *errcode, bool listen)
     };
 
     struct addrinfo *result = NULL;
-    if ((*errcode = getaddrinfo(na->address, na->service, &hints, &result))) {
+    if ((*errcode = getaddrinfo(na->addrlen ? na->address : NULL,
+                                na->service, &hints, &result))) {
         if (result)
             freeaddrinfo(result);
         return NULL;
@@ -259,20 +317,29 @@ netaddrinfo(const struct netaddr *na, int *errcode, bool listen)
 }
 
 static int
-netdialinet(const struct netaddr *na, int flag)
+inetsocket(const struct netaddr *na, int flag,
+           int (*op)(int, const struct sockaddr*, socklen_t))
 {
+    int sockflags = 0;
+    if (flag & NetdialCloexec)
+        sockflags |= SOCK_CLOEXEC;
+    if (flag & NetdialNonblock)
+        sockflags |= SOCK_NONBLOCK;
+
+    /* TODO: Use "errcode" for something. */
     int errcode;
-    struct addrinfo *ra = netaddrinfo(na, &errcode, false);
+    struct addrinfo *ra = netaddrinfo(na, &errcode, op == bind);
     if (!ra)
         return -1;
 
     int fd = -1;
     struct addrinfo *ai;
     for (ai = ra; ai; ai = ai->ai_next) {
-        if ((fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) == -1)
+        const int socktype = ai->ai_socktype | sockflags;
+        if ((fd = socket(ai->ai_family, socktype, ai->ai_protocol)) == -1)
             continue;
 
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) != -1)
+        if ((*op)(fd, ai->ai_addr, ai->ai_addrlen) != -1)
             break;
 
         close(fd);
@@ -281,6 +348,12 @@ netdialinet(const struct netaddr *na, int flag)
 
     freeaddrinfo(ra);
     return fd;
+}
+
+static inline int
+netdialinet(const struct netaddr *na, int flag)
+{
+    return inetsocket(na, flag, connect);
 }
 
 int
@@ -305,15 +378,27 @@ netdial(const char *address, int flag)
 static int
 netannounceunix(const struct netaddr *na, int flag)
 {
+    struct sockaddr_un name;
+    int fd = unixsocket(na, flag, &name);
+    if (fd < 0)
+        return -1;
+
+    if (bind(fd, (const struct sockaddr*) &name, sizeof(name))) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
 }
 
-static int
+static inline int
 netannounceinet(const struct netaddr *na, int flag)
 {
+    return inetsocket(na, flag, bind);
 }
 
 int
-netannounce(const char *address, int flag)
+netannounce(const char *address, int flag, int backlog)
 {
     struct netaddr na;
     if (!netaddrparse(address, &na)) {
@@ -321,8 +406,123 @@ netannounce(const char *address, int flag)
         return -1;
     }
 
-    if (na.family == AF_UNIX)
-        return netannounceunix(&na, flag);
+    int fd = (na.family == AF_UNIX)
+        ? netannounceunix(&na, flag)
+        : netannounceinet(&na, flag);
 
-    return netannounceinet(&na, flag);
+    if (fd < 0)
+        return -1;
+
+    if (!applyflags(&na, fd) || listen(fd, (backlog > 0) ? backlog : 5) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+static char*
+mknetaddr(int fd, const struct sockaddr_storage *sa, socklen_t salen)
+{
+    int socktype;
+    socklen_t socktypelen = sizeof(socktype);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socktype, &socktypelen))
+        socktype = SOCK_STREAM;
+
+    const char *netname = getnetname(AF_UNIX, socktype);
+    if (!netname)
+        return NULL;
+
+    struct dbuf b = DBUF_INIT;
+    dbuf_addstr(&b, netname);
+    dbuf_addch(&b, ':');
+
+    switch (sa->ss_family) {
+        case AF_UNIX:
+            dbuf_addmem(&b, ((const struct sockaddr_un*) sa)->sun_path, salen);
+            break;
+        case AF_INET:
+        case AF_INET6: {
+            char host[NI_MAXHOST + 1];
+            char serv[NI_MAXSERV + 1];
+            if (getnameinfo((const struct sockaddr*) sa, salen,
+                            host, sizeof(host),
+                            serv, sizeof(serv),
+                            socktype == SOCK_DGRAM ? NI_DGRAM : 0 |
+                            NI_NUMERICHOST |
+                            NI_NUMERICSERV)) {
+                dbuf_clear(&b);
+                return NULL;
+            }
+
+            dbuf_addstr(&b, host);
+            dbuf_addch(&b, ':');
+            dbuf_addstr(&b, serv);
+            break;
+        }
+    }
+
+    return dbuf_str(&b);
+}
+
+int
+netaccept(int fd, int flag, char **remoteaddr)
+{
+    assert(fd >= 0);
+
+    struct sockaddr_storage sa = {};
+    socklen_t salen = sizeof(sa);
+    int nfd = accept4(fd, (struct sockaddr*) &sa, &salen,
+                      (flag & NetdialNonblock) ? SOCK_NONBLOCK : 0 |
+                      (flag & NetdialCloexec) ? SOCK_CLOEXEC : 0);
+    if (nfd < 0)
+        return -1;
+
+    if (remoteaddr)
+        *remoteaddr = mknetaddr(nfd, &sa, salen);
+
+    return nfd;
+}
+
+int
+netclose(int fd, int flag)
+{
+    assert(fd >= 0);
+
+    switch (flag & NetdialReadwrite) {
+        /* Half-close. */
+        case NetdialRead:
+            return shutdown(fd, SHUT_RD);
+        case NetdialWrite:
+            return shutdown(fd, SHUT_WR);
+        case NetdialRead | NetdialWrite:
+            return shutdown(fd, SHUT_RDWR);
+
+        case NetdialClose: {
+            int listen = 0;
+            socklen_t len = sizeof(listen);
+            if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &listen, &len))
+                return -1;
+
+            struct sockaddr_storage ss;
+            if (listen) {
+                len = sizeof(ss);
+                if (getsockname(fd, (struct sockaddr*) &ss, &len))
+                    return -1;
+            }
+
+            if (close(fd))
+                return -1;
+
+            if (listen && ss.ss_family == AF_UNIX) {
+                /* XXX: .sun_path it might not be null terminated. */
+                char node[len + 1];
+                strncpy(node, ((struct sockaddr_un*) &ss)->sun_path, len);
+                return unlink(node);
+            }
+            break;
+        }
+    }
+
+    return 0;
 }
