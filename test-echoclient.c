@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 int
@@ -27,5 +28,33 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    close(fd);
+    for (;;) {
+        char buffer[512];
+        ssize_t ret;
+
+        if ((ret = read(STDIN_FILENO, buffer, sizeof(buffer))) < 0) {
+            fprintf(stderr, "Read error: %s.\n", strerror(errno));
+            break;
+        }
+        if (ret == 0)
+            break;
+
+        if ((ret = write(fd, buffer, ret)) < 0) {
+            fprintf(stderr, "Socket write error: %s.\n", strerror(errno));
+            break;
+        }
+
+        if ((ret = read(fd, buffer, sizeof(buffer))) < 0) {
+            fprintf(stderr, "Socket read error: %s.\n", strerror(errno));
+            break;
+        }
+
+        if ((ret = write(STDOUT_FILENO, buffer, ret)) < 0) {
+            fprintf(stderr, "Write error: %s.\n", strerror(errno));
+            break;
+        }
+    }
+
+    netclose(fd, NetdialClose);
+    return EXIT_SUCCESS;
 }
