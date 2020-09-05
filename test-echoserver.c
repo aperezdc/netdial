@@ -7,7 +7,7 @@
 
 #include "netdial.h"
 #include <errno.h>
-#include <ev.h>
+#include <event.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,36 +17,33 @@
 #include <unistd.h>
 
 struct conndata {
-    ev_io watcher;
+    struct event ev;
     char buffer[256];
     uint8_t size;
     size_t nbytes;
 };
 
 static void
-handle_socket_rdwr(EV_P_ ev_io *w, int revents)
+handle_socket_rdwr(int fd, short events, void *data)
 {
-    struct conndata *conn = (struct conndata*) w;
+    struct conndata *conn = data;
 
-    if (!conn->size && (revents & EV_READ)) {
+    if (!conn->size && (events & EV_READ)) {
         /* Read data. */
-        ssize_t r = read(w->fd, conn->buffer, sizeof(conn->buffer));
-        fprintf(stderr, "[#%d] Read %zd bytes.\n", w->fd, r);
+        ssize_t r = read(fd, conn->buffer, sizeof(conn->buffer));
+        fprintf(stderr, "[#%d] Read %zd bytes.\n", fd, r);
 
         if (r <= 0) {
             /* EOF or error: Close connection. */
             const char *errstr = strerror(errno);
 
-            ev_io_stop(EV_A_ w);
-            netclose(w->fd, NetdialClose);
+            event_del(&conn->ev);
+            netclose(fd, NetdialClose);
 
-            if (r < 0) {
-                fprintf(stderr, "[#%d] Closed, error: %s.\n",
-                        w->fd, errstr);
-            } else {
-                fprintf(stderr, "[#%d] Closed, exchanged %zu bytes.\n",
-                        w->fd, conn->nbytes);
-            }
+            if (r < 0)
+                fprintf(stderr, "[#%d] Closed, error: %s.\n", fd, errstr);
+            else
+                fprintf(stderr, "[#%d] Closed, exchanged %zu bytes.\n", fd, conn->nbytes);
 
             free(conn);
             return;
@@ -55,14 +52,14 @@ handle_socket_rdwr(EV_P_ ev_io *w, int revents)
         conn->size = r;
     }
 
-    if (conn->size && (revents & EV_WRITE)) {
+    if (conn->size && (events & EV_WRITE)) {
         /* Write pending data. */
-        ssize_t r = write(w->fd, conn->buffer, conn->size);
+        ssize_t r = write(fd, conn->buffer, conn->size);
         fprintf(stderr, "[#%d] Wrote %zd bytes, %zd pending.\n",
-                w->fd, r, conn->size - r);
+                fd, r, conn->size - r);
 
         if (r <= 0) {
-            fprintf(stderr, "[#%d] Write: %s.\n", w->fd, strerror(errno));
+            fprintf(stderr, "[#%d] Write: %s.\n", fd, strerror(errno));
             return;
         }
 
@@ -75,10 +72,10 @@ handle_socket_rdwr(EV_P_ ev_io *w, int revents)
 }
 
 static void
-handle_accept(EV_P_ ev_io *w, int revents)
+handle_accept(int fd, short events, void *data)
 {
     char *remote = NULL;
-    int nfd = netaccept(w->fd, NetdialNonblock, &remote);
+    int nfd = netaccept(fd, NetdialNonblock, &remote);
     if (nfd < 0) {
         fprintf(stderr, "Netaccept: %s.\n", strerror(errno));
         return;
@@ -88,15 +85,17 @@ handle_accept(EV_P_ ev_io *w, int revents)
     free(remote);
 
     struct conndata *conn = calloc(1, sizeof(struct conndata));
-    ev_io_init(&conn->watcher, handle_socket_rdwr, nfd, EV_READ | EV_WRITE);
-    ev_io_start(EV_A_ &conn->watcher);
+    event_set(&conn->ev, nfd, EV_READ | EV_WRITE | EV_PERSIST,
+              handle_socket_rdwr, conn);
+    event_add(&conn->ev, NULL);
 }
 
 static void
-handle_signal(EV_P_ ev_signal *w, int signum)
+handle_signal(int signum, short events, void *data)
 {
     fprintf(stderr, "Exiting gracefully...\n");
-    ev_break(EV_A_ EVBREAK_ALL);
+    signal_del(data);
+    event_loopexit(NULL);
 }
 
 int
@@ -116,16 +115,18 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    ev_io accept_watcher;
-    ev_io_init(&accept_watcher, handle_accept, fd, EV_READ);
+    struct event_base *evbase = event_init();
 
-    ev_signal sigint_watcher;
-    ev_signal_init(&sigint_watcher, handle_signal, SIGINT);
+    struct event evaccept;
+    event_set(&evaccept, fd, EV_READ | EV_PERSIST, handle_accept, NULL);
+    event_add(&evaccept, NULL);
 
-    struct ev_loop *loop = EV_DEFAULT;
-    ev_io_start(loop, &accept_watcher);
-    ev_signal_start(loop, &sigint_watcher);
-    ev_run(EV_DEFAULT_ 0);
+    struct event evsignal;
+    signal_set(&evsignal, SIGINT, handle_signal, &evsignal);
+    signal_add(&evsignal, NULL);
+
+    event_dispatch();
+    event_base_free(evbase);
 
     netclose(fd, NetdialClose);
     return EXIT_SUCCESS;
