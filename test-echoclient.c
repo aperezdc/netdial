@@ -55,6 +55,6 @@ main(int argc, char *argv[])
         }
     }
 
-    netclose(fd, NDclose);
+    nethangup(fd, NDclose);
     return EXIT_SUCCESS;
 }

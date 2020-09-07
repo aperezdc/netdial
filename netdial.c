@@ -468,7 +468,7 @@ netaccept(int fd, int flag, char **remoteaddr)
 }
 
 int
-netclose(int fd, int flag)
+nethangup(int fd, int flag)
 {
     assert(fd >= 0);
 

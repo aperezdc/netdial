@@ -38,7 +38,7 @@ handle_socket_rdwr(int fd, short events, void *data)
             const char *errstr = strerror(errno);
 
             event_del(&conn->ev);
-            netclose(fd, NDclose);
+            nethangup(fd, NDclose);
 
             if (r < 0)
                 fprintf(stderr, "[#%d] Closed, error: %s.\n", fd, errstr);
@@ -128,6 +128,6 @@ main(int argc, char *argv[])
     event_dispatch();
     event_base_free(evbase);
 
-    netclose(fd, NDclose);
+    nethangup(fd, NDclose);
     return EXIT_SUCCESS;
 }

@@ -56,6 +56,6 @@ enum {
 extern int netdial(const char *address, int flag);
 extern int netannounce(const char *address, int flag, int backlog);
 extern int netaccept(int fd, int flag, char **remoteaddr);
-extern int netclose(int fd, int flag);
+extern int nethangup(int fd, int flag);
 
 #endif /* !NETDIAL_H */
