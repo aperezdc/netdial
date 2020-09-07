@@ -38,7 +38,7 @@ handle_socket_rdwr(int fd, short events, void *data)
             const char *errstr = strerror(errno);
 
             event_del(&conn->ev);
-            netclose(fd, NetdialClose);
+            netclose(fd, NDclose);
 
             if (r < 0)
                 fprintf(stderr, "[#%d] Closed, error: %s.\n", fd, errstr);
@@ -75,7 +75,7 @@ static void
 handle_accept(int fd, short events, void *data)
 {
     char *remote = NULL;
-    int nfd = netaccept(fd, NetdialNonblock, &remote);
+    int nfd = netaccept(fd, NDdefault, &remote);
     if (nfd < 0) {
         fprintf(stderr, "Netaccept: %s.\n", strerror(errno));
         return;
@@ -109,7 +109,7 @@ main(int argc, char *argv[])
 
     setlinebuf(stderr);
 
-    int fd = netannounce(argv[1], NetdialNonblock, 0);
+    int fd = netannounce(argv[1], NDdefault, 0);
     if (fd < 0) {
         fprintf(stderr, "Cannot announce %s: %s.\n", argv[1], strerror(errno));
         return EXIT_FAILURE;
@@ -128,6 +128,6 @@ main(int argc, char *argv[])
     event_dispatch();
     event_base_free(evbase);
 
-    netclose(fd, NetdialClose);
+    netclose(fd, NDclose);
     return EXIT_SUCCESS;
 }

@@ -22,7 +22,7 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    int fd = netdial(argv[1], NetdialCloexec);
+    int fd = netdial(argv[1], NDblocking);
     if (fd == -1) {
         fprintf(stderr, "Cannot dial %s: %s.\n", argv[1], strerror(errno));
         return EXIT_FAILURE;
@@ -55,6 +55,6 @@ main(int argc, char *argv[])
         }
     }
 
-    netclose(fd, NetdialClose);
+    netclose(fd, NDclose);
     return EXIT_SUCCESS;
 }

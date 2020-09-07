@@ -76,12 +76,6 @@ beach:
 }
 #endif /* HAVE_ACCEPT4 */
 
-
-struct flagaction {
-    const char *name;
-    int flag;
-};
-
 #ifndef SO_PASSCRED
 #define SO_PASSCRED 0
 #endif /* !SO_PASSCRED */
@@ -90,32 +84,24 @@ struct flagaction {
 #define SO_PASSEC 0
 #endif /* !SO_PASSEC */
 
-static const struct flagaction unixflags[] = {
-    { "passcred", .flag = SO_PASSCRED },
-    { "passec",   .flag = SO_PASSEC   },
+static const struct {
+    int ndflag;
+    int sockopt;
+} optflags[] = {
+    { NDpasscred,  SO_PASSCRED  },
+    { NDpassec,    SO_PASSEC    },
+    { NDbroadcast, SO_BROADCAST },
+    { NDdebug,     SO_DEBUG     },
+    { NDkeepalive, SO_KEEPALIVE },
+    { NDreuseaddr, SO_REUSEADDR },
+    { NDreuseport, SO_REUSEPORT },
 };
 
-static const struct flagaction inetflags[] = {
-    { "broadcast", .flag = SO_BROADCAST },
-    { "debug",     .flag = SO_DEBUG     },
-    { "keepalive", .flag = SO_KEEPALIVE },
-    { "reuseaddr", .flag = SO_REUSEADDR },
-    { "reuseport", .flag = SO_REUSEPORT },
+enum {
+    NDsockflagmask = 0x000000FF,
+    NDunixoptmask  = 0x0000FF00,
+    NDsockoptmask  = 0xFFFF0000,
 };
-
-static const struct flagaction*
-getflag(const struct flagaction flags[], uint8_t nflags,
-        const char *name, unsigned namelen)
-{
-    assert(name);
-    for (unsigned i = 0; i < nflags; i++)
-        if (strncasecmp(name, flags[i].name, namelen) == 0)
-            return &flags[i];
-    return NULL;
-}
-
-#define maxflags ((nelem(unixflags) > nelem(inetflags) \
-                   ? nelem(unixflags) : nelem(inetflags)))
 
 static const struct {
     const char *name;
@@ -167,8 +153,6 @@ struct netaddr {
     char service[NI_MAXSERV + 1];
     uint16_t addrlen;
     uint16_t servlen;
-    const struct flagaction *flags[maxflags];
-    uint8_t nflags;
 };
 
 static bool
@@ -211,13 +195,12 @@ netaddrparse(const char *str, struct netaddr *na)
     na->address[nodelen] = '\0';
     na->addrlen = nodelen;
 
-    /* Port + flags are optional for Unix sockets. */
+    /* Port is optional for Unix sockets. */
     if (!colon)
         return na->family == AF_UNIX;
 
     const char *service = ++colon;
-    colon = strchr(service, ':');
-    const unsigned servicelen = colon ? colon - service : strlen(service);
+    const unsigned servicelen = strlen(service);
     if (servicelen > NI_MAXSERV)
         return false;
 
@@ -225,52 +208,27 @@ netaddrparse(const char *str, struct netaddr *na)
     na->service[servicelen] = '\0';
     na->servlen = servicelen;
 
-    /* Flags re optional. */
-    if (!colon)
-        return true;
-
-    const struct flagaction *flags =
-        (na->family == AF_UNIX) ? unixflags : inetflags;
-    unsigned nflags =
-        (na->family == AF_UNIX) ? nelem(unixflags) : nelem(inetflags);
-
-    const char *name = ++colon;
-    do {
-        colon = strchr(name, ',');
-        unsigned namelen = colon ? colon - name : strlen(name);
-        const struct flagaction *flag = getflag(flags, nflags, name, namelen);
-        if (!flag)
-            return false;
-
-        /* Check whether the flag is already in the array, skip if so. */
-        for (uint8_t i = 0; i < na->nflags; i++)
-            if (na->flags[i] == flag)
-                continue;
-
-        /* Add the flag. */
-        assert(na->nflags < maxflags);
-        na->flags[na->nflags++] = flag;
-    } while (colon);
-
     return true;
 }
 
 static bool
-applyflags(const struct netaddr *na, int fd)
+applyflags(int fd, int flags)
 {
-    assert(na);
     assert(fd >= 0);
 
-    for (uint8_t i = 0; i < na->nflags; i++) {
-        const struct flagaction *fa = na->flags[i];
-        if (fa->flag) {
-            static const int value = 1;
-            if (setsockopt(fd, SOL_SOCKET, fa->flag, &value, sizeof(value)))
-                return false;
-        } else {
+    for (unsigned i = 0; i < nelem(optflags); i++) {
+        if (optflags[i].sockopt == 0) {
             /* TODO: Flag is unsupported in this build, log warning. */
+            continue;
+        }
+
+        if (flags & optflags[i].ndflag) {
+            static const int value = 1;
+            if (setsockopt(fd, SOL_SOCKET, optflags[i].sockopt, &value, sizeof(value)))
+                return false;
         }
     }
+
     return true;
 }
 
@@ -289,9 +247,9 @@ unixsocket(const struct netaddr *na, int flag, struct sockaddr_un *name)
     strncpy(name->sun_path, na->address, na->addrlen);
 
     int socktype = na->socktype;
-    if (flag & NetdialCloexec)
+    if (!(flag & NDexeckeep))
         socktype |= SOCK_CLOEXEC;
-    if (flag & NetdialNonblock)
+    if (!(flag & NDblocking))
         socktype |= SOCK_NONBLOCK;
 
     return socket(AF_UNIX, socktype, 0);
@@ -338,9 +296,9 @@ inetsocket(const struct netaddr *na, int flag,
            int (*op)(int, const struct sockaddr*, socklen_t))
 {
     int sockflags = 0;
-    if (flag & NetdialCloexec)
+    if (!(flag & NDexeckeep))
         sockflags |= SOCK_CLOEXEC;
-    if (flag & NetdialNonblock)
+    if (!(flag & NDblocking))
         sockflags |= SOCK_NONBLOCK;
 
     /* TODO: Use "errcode" for something. */
@@ -368,23 +326,27 @@ inetsocket(const struct netaddr *na, int flag,
 }
 
 static inline int
-netdialinet(const struct netaddr *na, int flag)
+netdialinet(const struct netaddr *na, int flags)
 {
-    return inetsocket(na, flag, connect);
+    return inetsocket(na, flags, connect);
 }
 
 int
-netdial(const char *address, int flag)
+netdial(const char *address, int flags)
 {
     struct netaddr na;
     if (!netaddrparse(address, &na))
         return -1;
 
-    int fd = (na.family == AF_UNIX)
-        ? netdialunix(&na, flag)
-        : netdialinet(&na, flag);
+    int fd;
+    if (na.family == AF_UNIX) {
+        fd = netdialunix(&na, flags);
+    } else {
+        flags &= ~NDunixoptmask;
+        fd = netdialinet(&na, flags);
+    }
 
-    if (fd >= 0 && !applyflags(&na, fd)) {
+    if (fd >= 0 && !applyflags(fd, flags)) {
         close(fd);
         return -1;
     }
@@ -415,7 +377,7 @@ netannounceinet(const struct netaddr *na, int flag)
 }
 
 int
-netannounce(const char *address, int flag, int backlog)
+netannounce(const char *address, int flags, int backlog)
 {
     struct netaddr na;
     if (!netaddrparse(address, &na)) {
@@ -423,14 +385,18 @@ netannounce(const char *address, int flag, int backlog)
         return -1;
     }
 
-    int fd = (na.family == AF_UNIX)
-        ? netannounceunix(&na, flag)
-        : netannounceinet(&na, flag);
+    int fd;
+    if (na.family == AF_UNIX) {
+        fd = netannounceunix(&na, flags);
+    } else {
+        flags &= ~NDunixoptmask;
+        fd = netannounceinet(&na, flags);
+    }
 
     if (fd < 0)
         return -1;
 
-    if (!applyflags(&na, fd) || listen(fd, (backlog > 0) ? backlog : 5) < 0) {
+    if (!applyflags(fd, flags) || listen(fd, (backlog > 0) ? backlog : 5) < 0) {
         close(fd);
         return -1;
     }
@@ -490,8 +456,8 @@ netaccept(int fd, int flag, char **remoteaddr)
     struct sockaddr_storage sa = {};
     socklen_t salen = sizeof(sa);
     int nfd = accept4(fd, (struct sockaddr*) &sa, &salen,
-                      (flag & NetdialNonblock) ? SOCK_NONBLOCK : 0 |
-                      (flag & NetdialCloexec) ? SOCK_CLOEXEC : 0);
+                      (flag & NDblocking) ? 0 : SOCK_NONBLOCK |
+                      (flag & NDexeckeep) ? 0 : SOCK_CLOEXEC);
     if (nfd < 0)
         return -1;
 
@@ -506,16 +472,16 @@ netclose(int fd, int flag)
 {
     assert(fd >= 0);
 
-    switch (flag & NetdialReadwrite) {
+    switch (flag & NDrdwr) {
         /* Half-close. */
-        case NetdialRead:
+        case NDread:
             return shutdown(fd, SHUT_RD);
-        case NetdialWrite:
+        case NDwrite:
             return shutdown(fd, SHUT_WR);
-        case NetdialRead | NetdialWrite:
+        case NDrdwr:
             return shutdown(fd, SHUT_RDWR);
 
-        case NetdialClose: {
+        case NDclose: {
             int listen = 0;
             socklen_t len = sizeof(listen);
             if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &listen, &len))
