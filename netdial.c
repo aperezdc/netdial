@@ -412,7 +412,7 @@ mknetaddr(int fd, const struct sockaddr_storage *sa, socklen_t salen)
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socktype, &socktypelen))
         socktype = SOCK_STREAM;
 
-    const char *netname = getnetname(AF_UNIX, socktype);
+    const char *netname = getnetname(sa->ss_family, socktype);
     if (!netname)
         return NULL;
 
