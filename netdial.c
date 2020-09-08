@@ -251,7 +251,7 @@ unixsocket(const struct netaddr *na, int flags,
         socktype |= SOCK_NONBLOCK;
 
     int fd = socket(AF_UNIX, socktype, 0);
-    if (fd < 0)
+    if (fd == -1)
         return -1;
 
     if ((*op)(fd, (const struct sockaddr*) &name, sizeof(name)) == -1) {
@@ -331,7 +331,10 @@ netdial(const char *address, int flags)
         fd = inetsocket(&na, flags, connect);
     }
 
-    if (fd >= 0 && !applyflags(fd, flags)) {
+    if (fd == -1)
+        return -1;
+
+    if (!applyflags(fd, flags)) {
         close(fd);
         return -1;
     }
@@ -356,7 +359,7 @@ netannounce(const char *address, int flags, int backlog)
         fd = inetsocket(&na, flags, bind);
     }
 
-    if (fd < 0)
+    if (fd == -1)
         return -1;
 
     if (!applyflags(fd, flags) || listen(fd, (backlog > 0) ? backlog : 5) < 0) {
@@ -419,7 +422,7 @@ netaccept(int fd, int flags, char **remoteaddr)
     int nfd = accept4(fd, (struct sockaddr*) &sa, &salen,
                       (flags & NDblocking) ? 0 : SOCK_NONBLOCK |
                       (flags & NDexeckeep) ? 0 : SOCK_CLOEXEC);
-    if (nfd < 0)
+    if (nfd == -1)
         return -1;
 
     if (remoteaddr)
