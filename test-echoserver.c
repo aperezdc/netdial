@@ -78,7 +78,7 @@ handle_accept(int fd, short events, void *data)
         char *remote = NULL;
         int nfd = netaccept(fd, NDdefault, &remote);
         if (nfd < 0) {
-            if (errno == EWOULDBLOCK) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 fprintf(stderr, "[#%d] Accepted %u new connections.\n", fd, n);
             } else {
                 fprintf(stderr, "[#%d] Netaccept: %s.\n", fd, strerror(errno));
