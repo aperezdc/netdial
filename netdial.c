@@ -158,6 +158,8 @@ struct netaddr {
 static bool
 netaddrparse(const char *str, struct netaddr *na)
 {
+    assert(na);
+
     if (!str)
         return false;
 
@@ -268,6 +270,9 @@ unixsocket(const struct netaddr *na, int flags,
 static struct addrinfo*
 netaddrinfo(const struct netaddr *na, int *errcode, bool listen)
 {
+    assert(na);
+    assert(errcode);
+
     const struct addrinfo hints = {
         .ai_family = na->family,
         .ai_socktype = na->socktype,
@@ -378,6 +383,8 @@ netannounce(const char *address, int flags, int backlog)
 static char*
 mknetaddr(int fd, const struct sockaddr_storage *sa, socklen_t salen)
 {
+    assert(sa);
+
     int socktype;
     socklen_t socktypelen = sizeof(socktype);
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socktype, &socktypelen))
