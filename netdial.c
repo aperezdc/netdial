@@ -307,8 +307,7 @@ inetsocket(const struct netaddr *na, int flags,
         return -1;
 
     int fd = -1;
-    struct addrinfo *ai;
-    for (ai = ra; ai; ai = ai->ai_next) {
+    for (struct addrinfo *ai = ra; ai; ai = ai->ai_next) {
         const int socktype = ai->ai_socktype | sockflags;
         if ((fd = socket(ai->ai_family, socktype, ai->ai_protocol)) == -1)
             continue;
