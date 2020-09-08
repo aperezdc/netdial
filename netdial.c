@@ -233,7 +233,7 @@ applyflags(int fd, int flags)
 }
 
 static int
-unixsocket(const struct netaddr *na, int flag,
+unixsocket(const struct netaddr *na, int flags,
            int (*op)(int, const struct sockaddr*, socklen_t))
 {
     assert(na);
@@ -247,9 +247,9 @@ unixsocket(const struct netaddr *na, int flag,
     strncpy(name.sun_path, na->address, na->addrlen);
 
     int socktype = na->socktype;
-    if (!(flag & NDexeckeep))
+    if (!(flags & NDexeckeep))
         socktype |= SOCK_CLOEXEC;
-    if (!(flag & NDblocking))
+    if (!(flags & NDblocking))
         socktype |= SOCK_NONBLOCK;
 
     int fd = socket(AF_UNIX, socktype, 0);
@@ -285,13 +285,13 @@ netaddrinfo(const struct netaddr *na, int *errcode, bool listen)
 }
 
 static int
-inetsocket(const struct netaddr *na, int flag,
+inetsocket(const struct netaddr *na, int flags,
            int (*op)(int, const struct sockaddr*, socklen_t))
 {
     int sockflags = 0;
-    if (!(flag & NDexeckeep))
+    if (!(flags & NDexeckeep))
         sockflags |= SOCK_CLOEXEC;
-    if (!(flag & NDblocking))
+    if (!(flags & NDblocking))
         sockflags |= SOCK_NONBLOCK;
 
     /* TODO: Use "errcode" for something. */
@@ -414,15 +414,15 @@ mknetaddr(int fd, const struct sockaddr_storage *sa, socklen_t salen)
 }
 
 int
-netaccept(int fd, int flag, char **remoteaddr)
+netaccept(int fd, int flags, char **remoteaddr)
 {
     assert(fd >= 0);
 
     struct sockaddr_storage sa = {};
     socklen_t salen = sizeof(sa);
     int nfd = accept4(fd, (struct sockaddr*) &sa, &salen,
-                      (flag & NDblocking) ? 0 : SOCK_NONBLOCK |
-                      (flag & NDexeckeep) ? 0 : SOCK_CLOEXEC);
+                      (flags & NDblocking) ? 0 : SOCK_NONBLOCK |
+                      (flags & NDexeckeep) ? 0 : SOCK_CLOEXEC);
     if (nfd < 0)
         return -1;
 
@@ -433,11 +433,11 @@ netaccept(int fd, int flag, char **remoteaddr)
 }
 
 int
-nethangup(int fd, int flag)
+nethangup(int fd, int flags)
 {
     assert(fd >= 0);
 
-    switch (flag & NDrdwr) {
+    switch (flags & NDrdwr) {
         /* Half-close. */
         case NDread:
             return shutdown(fd, SHUT_RD);

@@ -53,9 +53,9 @@ enum {
     NDrdwr  = NDread | NDwrite,
 };
 
-extern int netdial(const char *address, int flag);
-extern int netannounce(const char *address, int flag, int backlog);
-extern int netaccept(int fd, int flag, char **remoteaddr);
-extern int nethangup(int fd, int flag);
+extern int netdial(const char *address, int flags);
+extern int netannounce(const char *address, int flags, int backlog);
+extern int netaccept(int fd, int flags, char **remoteaddr);
+extern int nethangup(int fd, int flags);
 
 #endif /* !NETDIAL_H */
