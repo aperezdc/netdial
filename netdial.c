@@ -158,6 +158,9 @@ struct netaddr {
 static bool
 netaddrparse(const char *str, struct netaddr *na)
 {
+    if (!str)
+        return false;
+
     *na = (struct netaddr) {};
 
     const char *type = str;
