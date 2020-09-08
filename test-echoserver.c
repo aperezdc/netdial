@@ -6,6 +6,7 @@
  */
 
 #include "netdial.h"
+#include <assert.h>
 #include <errno.h>
 #include <event.h>
 #include <signal.h>
@@ -16,58 +17,212 @@
 #include <string.h>
 #include <unistd.h>
 
-struct conndata {
-    struct event ev;
-    char buffer[256];
-    uint8_t size;
-    size_t nbytes;
+enum {
+    Chunksize = 1024U,
+};
+
+struct chunk {
+    uint8_t       buf[Chunksize];
+    size_t        len;
+    size_t        off;
+    struct chunk *next;
+};
+
+struct chunkq {
+    struct chunk *head;
+    struct chunk *tail;
+};
+
+static struct chunk*
+mkchunk(void)
+{
+    struct chunk *c = malloc(sizeof(struct chunk));
+    c->len = c->off = 0;
+    c->next = NULL;
+    return c;
+}
+
+static void
+freechunk(struct chunk **c)
+{
+    assert(c);
+    free(*c);
+    c = NULL;
+}
+
+static void
+pushchunk(struct chunkq *q, struct chunk *c)
+{
+    assert(q);
+    assert(c);
+
+    if (q->tail) {
+        assert(q->tail->next == NULL);
+        assert(c->next == NULL);
+
+        q->tail->next = c;
+        q->tail = c;
+    } else {
+        assert(q->head == NULL);
+
+        q->head = q->tail = c;
+    }
+}
+
+static struct chunk*
+popchunk(struct chunkq *q)
+{
+    assert(q);
+    assert(q->head);
+
+    struct chunk *c = q->head;
+    q->head = q->head->next;
+    return c;
+}
+
+static struct chunk*
+firstchunk(struct chunkq *q)
+{
+    assert(q);
+    assert(q->head);
+    return q->head;
+}
+
+static bool
+haschunk(const struct chunkq* q)
+{
+    assert(q);
+    return q->head != NULL;
+}
+
+struct conn {
+    struct event  rev;
+    struct event  wev;
+    struct chunkq chunks;
+    size_t        nbytes;
 };
 
 static void
-handle_socket_rdwr(int fd, short events, void *data)
+freeconn(struct conn **conn)
 {
-    struct conndata *conn = data;
+    assert(conn);
 
-    if (!conn->size && (events & EV_READ)) {
-        /* Read data. */
-        ssize_t r = read(fd, conn->buffer, sizeof(conn->buffer));
-        fprintf(stderr, "[#%d] Read %zd bytes.\n", fd, r);
-
-        if (r <= 0) {
-            /* EOF or error: Close connection. */
-            const char *errstr = strerror(errno);
-
-            event_del(&conn->ev);
-            nethangup(fd, NDclose);
-
-            if (r < 0)
-                fprintf(stderr, "[#%d] Closed, error: %s.\n", fd, errstr);
-            else
-                fprintf(stderr, "[#%d] Closed, exchanged %zu bytes.\n", fd, conn->nbytes);
-
-            free(conn);
-            return;
-        }
-
-        conn->size = r;
+    event_del(&(*conn)->rev);
+    while (haschunk(&(*conn)->chunks)) {
+        struct chunk *c = popchunk(&(*conn)->chunks);
+        freechunk(&c);
     }
 
-    if (conn->size && (events & EV_WRITE)) {
-        /* Write pending data. */
-        ssize_t r = write(fd, conn->buffer, conn->size);
-        fprintf(stderr, "[#%d] Wrote %zd bytes, %zd pending.\n",
-                fd, r, conn->size - r);
+    free(*conn);
+    conn = NULL;
+}
 
-        if (r <= 0) {
-            fprintf(stderr, "[#%d] Write: %s.\n", fd, strerror(errno));
+static void
+handle_conn_read(int fd, short events, void *data)
+{
+    struct conn *conn = data;
+
+    for (;;) {
+        /* Try to read as many chunks as possible before blocking. */
+        fprintf(stderr,
+                "[#%d] Attempting to read %u bytes.\n",
+                fd, Chunksize);
+
+        struct chunk *c = mkchunk();
+        ssize_t r = read(fd, c->buf, Chunksize);
+        if (r == 0) {
+            /* Client disconnected. */
+            fprintf(stderr,
+                    "[#%d] Closed, exchanged %zu bytes.\n",
+                    fd, conn->nbytes);
+            freechunk(&c);
+            freeconn(&conn);
+            nethangup(fd, NDclose);
             return;
         }
 
-        conn->nbytes += r;
-        conn->size -= r;
+        if (r == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                fprintf(stderr,
+                        "[#%d] Not ready, will read later.\n",
+                        fd);
+                break;
+            }
 
-        if (r < conn->size)
-            memmove(conn->buffer, conn->buffer + r, conn->size);
+            fprintf(stderr,
+                    "[#%d] Closed, read error: %s.\n",
+                    fd, strerror(errno));
+            freechunk(&c);
+            freeconn(&conn);
+            nethangup(fd, NDclose);
+            return;
+        }
+
+        fprintf(stderr, "[#%d] Read %zd bytes.\n", fd, r);
+        c->len = r;
+        pushchunk(&conn->chunks, c);
+
+        if (r < Chunksize) {
+            fprintf(stderr,
+                    "[#%d] Short read, will read later.\n",
+                    fd);
+            break;
+        }
+    }
+
+    /* Schedule writing. */
+    if (haschunk(&conn->chunks))
+        event_add(&conn->wev, NULL);
+}
+
+static void
+handle_conn_write(int fd, short events, void *data)
+{
+    struct conn *conn = data;
+
+    while (haschunk(&conn->chunks)) {
+        struct chunk *c = firstchunk(&conn->chunks);
+        assert(c->len - c->off > 0);
+        size_t n = c->len - c->off;
+
+        fprintf(stderr,
+                "[#%d] Attempting to write %zu bytes.\n",
+                fd, n);
+
+        ssize_t r = write(fd, c->buf + c->off, n);
+
+        if (r == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* Try again later. */
+                event_add(&conn->wev, NULL);
+                return;
+            }
+
+            fprintf(stderr,
+                    "[#%d] Closed, read error: %s.\n",
+                    fd, strerror(errno));
+            freechunk(&c);
+            freeconn(&conn);
+            nethangup(fd, NDclose);
+            return;
+        }
+
+        fprintf(stderr,
+                "[#%d] Wrote %zd bytes, %zd pending.\n",
+                fd, r, n - r);
+
+        conn->nbytes += r;
+
+        if (r < n) {
+            /* Data pending to write. Update offset and reschedule. */
+            c->off += n;
+            event_add(&conn->wev, NULL);
+            return;
+        }
+
+        /* Chunk completely written. */
+        popchunk(&conn->chunks);
+        freechunk(&c);
     }
 }
 
@@ -89,10 +244,15 @@ handle_accept(int fd, short events, void *data)
         fprintf(stderr, "[#%d] New connection <%s>\n", nfd, remote);
         free(remote);
 
-        struct conndata *conn = calloc(1, sizeof(struct conndata));
-        event_set(&conn->ev, nfd, EV_READ | EV_WRITE | EV_PERSIST,
-                  handle_socket_rdwr, conn);
-        event_add(&conn->ev, NULL);
+        struct conn *conn = calloc(1, sizeof(struct conn));
+
+        event_set(&conn->rev, nfd, EV_READ | EV_PERSIST,
+                  handle_conn_read, conn);
+        event_set(&conn->wev, nfd, EV_WRITE,
+                  handle_conn_write, conn);
+
+        /* Start reading only. */
+        event_add(&conn->rev, NULL);
     }
 }
 
