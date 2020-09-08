@@ -233,18 +233,18 @@ applyflags(int fd, int flags)
 }
 
 static int
-unixsocket(const struct netaddr *na, int flag, struct sockaddr_un *name)
+unixsocket(const struct netaddr *na, int flag,
+           int (*op)(int, const struct sockaddr*, socklen_t))
 {
     assert(na);
-    assert(name);
+    assert(op);
 
-    if (na->addrlen >= sizeof(name->sun_path)) {
+    struct sockaddr_un name = { .sun_family = AF_UNIX };
+    if (na->addrlen >= sizeof(name.sun_path)) {
         errno = ERANGE;
         return -1;
     }
-
-    *name = (struct sockaddr_un) { .sun_family = AF_UNIX };
-    strncpy(name->sun_path, na->address, na->addrlen);
+    strncpy(name.sun_path, na->address, na->addrlen);
 
     int socktype = na->socktype;
     if (!(flag & NDexeckeep))
@@ -252,18 +252,11 @@ unixsocket(const struct netaddr *na, int flag, struct sockaddr_un *name)
     if (!(flag & NDblocking))
         socktype |= SOCK_NONBLOCK;
 
-    return socket(AF_UNIX, socktype, 0);
-}
-
-static int
-netdialunix(const struct netaddr *na, int flag)
-{
-    struct sockaddr_un name;
-    int fd = unixsocket(na, flag, &name);
+    int fd = socket(AF_UNIX, socktype, 0);
     if (fd < 0)
         return -1;
 
-    if (connect(fd, (const struct sockaddr*) &name, sizeof(name)) < 0) {
+    if ((*op)(fd, (const struct sockaddr*) &name, sizeof(name)) == -1) {
         close(fd);
         return -1;
     }
@@ -325,12 +318,6 @@ inetsocket(const struct netaddr *na, int flag,
     return fd;
 }
 
-static inline int
-netdialinet(const struct netaddr *na, int flags)
-{
-    return inetsocket(na, flags, connect);
-}
-
 int
 netdial(const char *address, int flags)
 {
@@ -340,10 +327,10 @@ netdial(const char *address, int flags)
 
     int fd;
     if (na.family == AF_UNIX) {
-        fd = netdialunix(&na, flags);
+        fd = unixsocket(&na, flags, connect);
     } else {
         flags &= ~NDunixoptmask;
-        fd = netdialinet(&na, flags);
+        fd = inetsocket(&na, flags, connect);
     }
 
     if (fd >= 0 && !applyflags(fd, flags)) {
@@ -352,28 +339,6 @@ netdial(const char *address, int flags)
     }
 
     return fd;
-}
-
-static int
-netannounceunix(const struct netaddr *na, int flag)
-{
-    struct sockaddr_un name;
-    int fd = unixsocket(na, flag, &name);
-    if (fd < 0)
-        return -1;
-
-    if (bind(fd, (const struct sockaddr*) &name, sizeof(name))) {
-        close(fd);
-        return -1;
-    }
-
-    return fd;
-}
-
-static inline int
-netannounceinet(const struct netaddr *na, int flag)
-{
-    return inetsocket(na, flag, bind);
 }
 
 int
@@ -387,10 +352,10 @@ netannounce(const char *address, int flags, int backlog)
 
     int fd;
     if (na.family == AF_UNIX) {
-        fd = netannounceunix(&na, flags);
+        fd = unixsocket(&na, flags, bind);
     } else {
         flags &= ~NDunixoptmask;
-        fd = netannounceinet(&na, flags);
+        fd = inetsocket(&na, flags, bind);
     }
 
     if (fd < 0)
