@@ -74,20 +74,26 @@ handle_socket_rdwr(int fd, short events, void *data)
 static void
 handle_accept(int fd, short events, void *data)
 {
-    char *remote = NULL;
-    int nfd = netaccept(fd, NDdefault, &remote);
-    if (nfd < 0) {
-        fprintf(stderr, "Netaccept: %s.\n", strerror(errno));
-        return;
+    for (unsigned n = 0;; n++) {
+        char *remote = NULL;
+        int nfd = netaccept(fd, NDdefault, &remote);
+        if (nfd < 0) {
+            if (errno == EWOULDBLOCK) {
+                fprintf(stderr, "[#%d] Accepted %u new connections.\n", fd, n);
+            } else {
+                fprintf(stderr, "[#%d] Netaccept: %s.\n", fd, strerror(errno));
+            }
+            break;
+        }
+
+        fprintf(stderr, "[#%d] New connection <%s>\n", nfd, remote);
+        free(remote);
+
+        struct conndata *conn = calloc(1, sizeof(struct conndata));
+        event_set(&conn->ev, nfd, EV_READ | EV_WRITE | EV_PERSIST,
+                  handle_socket_rdwr, conn);
+        event_add(&conn->ev, NULL);
     }
-
-    fprintf(stderr, "[#%d] New connection <%s>\n", nfd, remote);
-    free(remote);
-
-    struct conndata *conn = calloc(1, sizeof(struct conndata));
-    event_set(&conn->ev, nfd, EV_READ | EV_WRITE | EV_PERSIST,
-              handle_socket_rdwr, conn);
-    event_add(&conn->ev, NULL);
 }
 
 static void
