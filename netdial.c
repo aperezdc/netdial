@@ -320,8 +320,10 @@ int
 netdial(const char *address, int flags)
 {
     struct netaddr na;
-    if (!netaddrparse(address, &na))
+    if (!netaddrparse(address, &na)) {
+        errno = EINVAL;
         return -1;
+    }
 
     int fd;
     if (na.family == AF_UNIX) {
