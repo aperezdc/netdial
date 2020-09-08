@@ -470,9 +470,12 @@ nethangup(int fd, int flags)
                 strncpy(node, ((struct sockaddr_un*) &ss)->sun_path, len);
                 return unlink(node);
             }
-            break;
-        }
-    }
 
-    return 0;
+            return 0;
+        }
+
+        default:
+            errno = EINVAL;
+            return -1;
+    }
 }
