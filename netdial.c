@@ -214,8 +214,6 @@ netaddrparse(const char *str, struct netaddr *na)
 static bool
 applyflags(int fd, int flags)
 {
-    assert(fd >= 0);
-
     for (unsigned i = 0; i < nelem(optflags); i++) {
         if (optflags[i].sockopt == 0) {
             /* TODO: Flag is unsupported in this build, log warning. */
@@ -416,8 +414,6 @@ mknetaddr(int fd, const struct sockaddr_storage *sa, socklen_t salen)
 int
 netaccept(int fd, int flags, char **remoteaddr)
 {
-    assert(fd >= 0);
-
     struct sockaddr_storage sa = {};
     socklen_t salen = sizeof(sa);
     int nfd = accept4(fd, (struct sockaddr*) &sa, &salen,
@@ -435,8 +431,6 @@ netaccept(int fd, int flags, char **remoteaddr)
 int
 nethangup(int fd, int flags)
 {
-    assert(fd >= 0);
-
     switch (flags & NDrdwr) {
         /* Half-close. */
         case NDread:
