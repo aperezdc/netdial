@@ -281,7 +281,6 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    setlinebuf(stderr);
     setenv("EVENT_SHOW_METHOD", "1", 1);
 
     int fd = netannounce(argv[1], NDdefault, 0);
