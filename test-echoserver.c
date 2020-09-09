@@ -229,6 +229,8 @@ handle_conn_write(int fd, short events, void *data)
 static void
 handle_accept(int fd, short events, void *data)
 {
+    struct event_base *evbase = data;
+
     for (unsigned n = 0;; n++) {
         char *remote = NULL;
         int nfd = netaccept(fd, NDdefault, &remote);
@@ -248,8 +250,11 @@ handle_accept(int fd, short events, void *data)
 
         event_set(&conn->rev, nfd, EV_READ | EV_PERSIST,
                   handle_conn_read, conn);
+        event_base_set(evbase, &conn->rev);
+
         event_set(&conn->wev, nfd, EV_WRITE,
                   handle_conn_write, conn);
+        event_base_set(evbase, &conn->wev);
 
         /* Start reading only. */
         event_add(&conn->rev, NULL);
@@ -259,9 +264,12 @@ handle_accept(int fd, short events, void *data)
 static void
 handle_signal(int signum, short events, void *data)
 {
-    fprintf(stderr, "Exiting gracefully...\n");
-    signal_del(data);
-    event_loopexit(NULL);
+    struct event *ev = data;
+
+    fprintf(stderr, "\rExiting gracefully...\n");
+    signal_del(ev);
+
+    event_base_loopexit(ev->ev_base, NULL);
 }
 
 int
@@ -284,14 +292,16 @@ main(int argc, char *argv[])
     struct event_base *evbase = event_init();
 
     struct event evaccept;
-    event_set(&evaccept, fd, EV_READ | EV_PERSIST, handle_accept, NULL);
+    event_set(&evaccept, fd, EV_READ | EV_PERSIST, handle_accept, evbase);
+    event_base_set(evbase, &evaccept);
     event_add(&evaccept, NULL);
 
     struct event evsignal;
     signal_set(&evsignal, SIGINT, handle_signal, &evsignal);
+    event_base_set(evbase, &evaccept);
     signal_add(&evsignal, NULL);
 
-    event_dispatch();
+    event_base_dispatch(evbase);
     event_base_free(evbase);
 
     nethangup(fd, NDclose);
