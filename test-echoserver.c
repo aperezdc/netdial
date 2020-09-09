@@ -282,6 +282,7 @@ main(int argc, char *argv[])
     }
 
     setlinebuf(stderr);
+    setenv("EVENT_SHOW_METHOD", "1", 1);
 
     int fd = netannounce(argv[1], NDdefault, 0);
     if (fd < 0) {
@@ -290,6 +291,7 @@ main(int argc, char *argv[])
     }
 
     struct event_base *evbase = event_init();
+    fprintf(stderr, "[#%d] Listening on <%s>.\n", fd, argv[1]);
 
     struct event evaccept;
     event_set(&evaccept, fd, EV_READ | EV_PERSIST, handle_accept, evbase);
