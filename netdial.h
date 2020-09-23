@@ -47,15 +47,23 @@ enum {
 };
 
 enum {
+    /* Hangup flags. */
     NDclose = 0,
     NDread  = 1 << 1,
     NDwrite = 1 << 2,
     NDrdwr  = NDread | NDwrite,
 };
 
+enum {
+    /* Address kind. */
+    NDlocal,
+    NDremote,
+};
+
 extern int netdial(const char *address, int flags);
 extern int netannounce(const char *address, int flags, int backlog);
 extern int netaccept(int fd, int flags, char **remoteaddr);
 extern int nethangup(int fd, int flags);
+extern int netaddress(int fd, int kind, char **address);
 
 #endif /* !NETDIAL_H */

@@ -485,3 +485,33 @@ nethangup(int fd, int flags)
             return -1;
     }
 }
+
+int
+netaddress(int fd, int kind, char **address)
+{
+    if ((kind != NDlocal && kind != NDremote) || !address) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    struct sockaddr_storage sa = {};
+    socklen_t salen = sizeof(sa);
+    int (*getname)(int, struct sockaddr*, socklen_t*) = NULL;
+
+    switch (kind) {
+        case NDlocal:
+            getname = getsockname;
+            break;
+        case NDremote:
+            getname = getpeername;
+            break;
+        default:
+            assert(!"Unrechable");
+            abort();
+    }
+
+    if ((*getname)(fd, (struct sockaddr*) &sa, &salen) == -1)
+        return -1;
+
+    return (*address = mknetaddr(fd, &sa, salen)) ? 0 : -1;
+}

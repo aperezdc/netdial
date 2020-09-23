@@ -290,7 +290,16 @@ main(int argc, char *argv[])
     }
 
     struct event_base *evbase = event_init();
-    fprintf(stderr, "[#%d] Listening on <%s>.\n", fd, argv[1]);
+    char *localaddr = NULL;
+    if (netaddress(fd, NDlocal, &localaddr) == -1) {
+        fprintf(stderr, "Cannot obtain local socket address: %s.\n", strerror(errno));
+        nethangup(fd, NDclose);
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stderr, "[#%d] Listening on <%s>.\n", fd, localaddr);
+    free(localaddr);
+    localaddr = NULL;
 
     struct event evaccept;
     event_set(&evaccept, fd, EV_READ | EV_PERSIST, handle_accept, evbase);
